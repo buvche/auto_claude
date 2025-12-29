@@ -41,11 +41,36 @@ class Improvement:
 
 
 @dataclass
+class UsageStats:
+    """Claude API usage statistics."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    total_cost_usd: float = 0.0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    def estimate_cost(self) -> float:
+        """Estimate cost based on token usage (Sonnet 3.5 pricing)."""
+        if self.total_cost_usd > 0:
+            return self.total_cost_usd
+        # Sonnet pricing: $3/M input, $15/M output, $0.30/M cache read
+        input_cost = self.input_tokens * 0.000003
+        output_cost = self.output_tokens * 0.000015
+        cache_cost = self.cache_read_tokens * 0.0000003
+        return input_cost + output_cost + cache_cost
+
+
+@dataclass
 class EnvisionResult:
     """Result of the envision analysis."""
     improvements: list[Improvement]
     analysis_time_seconds: float
     files_analyzed: int
+    usage: UsageStats | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -204,8 +229,8 @@ def parse_improvements_from_response(response_text: str) -> list[Improvement]:
     return improvements
 
 
-async def run_analysis(max_time: int) -> tuple[str, int]:
-    """Run the Claude analysis and return the response text and file count."""
+async def run_analysis(max_time: int) -> tuple[str, int, UsageStats]:
+    """Run the Claude analysis and return the response text, file count, and usage stats."""
     prompt = build_analysis_prompt()
 
     options = ClaudeCodeOptions(
@@ -218,10 +243,36 @@ async def run_analysis(max_time: int) -> tuple[str, int]:
     files_analyzed = 0
     start_time = time.time()
 
+    # Track usage from messages
+    usage = UsageStats()
+    processed_message_ids: set[str] = set()
+
     async for message in query(prompt=prompt, options=options):
         # Check time limit
         if time.time() - start_time > max_time:
             break
+
+        # Track usage from assistant messages (deduplicate by message ID)
+        message_id = getattr(message, "id", None)
+        if message_id and message_id not in processed_message_ids:
+            msg_usage = getattr(message, "usage", None)
+            if msg_usage:
+                processed_message_ids.add(message_id)
+                # Extract usage data (handle both dict and object)
+                if isinstance(msg_usage, dict):
+                    usage.input_tokens += msg_usage.get("input_tokens", 0)
+                    usage.output_tokens += msg_usage.get("output_tokens", 0)
+                    usage.cache_read_tokens += msg_usage.get("cache_read_input_tokens", 0)
+                    usage.cache_creation_tokens += msg_usage.get("cache_creation_input_tokens", 0)
+                else:
+                    usage.input_tokens += getattr(msg_usage, "input_tokens", 0)
+                    usage.output_tokens += getattr(msg_usage, "output_tokens", 0)
+                    usage.cache_read_tokens += getattr(msg_usage, "cache_read_input_tokens", 0)
+                    usage.cache_creation_tokens += getattr(msg_usage, "cache_creation_input_tokens", 0)
+
+        # Check for final result with total cost
+        if hasattr(message, "total_cost_usd") and message.total_cost_usd:
+            usage.total_cost_usd = float(message.total_cost_usd)
 
         if hasattr(message, "content"):
             if isinstance(message.content, str):
@@ -236,7 +287,7 @@ async def run_analysis(max_time: int) -> tuple[str, int]:
         elif hasattr(message, "result") and message.result:
             result_text = str(message.result)
 
-    return result_text, max(files_analyzed, 1)
+    return result_text, max(files_analyzed, 1), usage
 
 
 async def analyze_codebase(max_agents: int, max_time: int, category: str) -> EnvisionResult:
@@ -245,7 +296,7 @@ async def analyze_codebase(max_agents: int, max_time: int, category: str) -> Env
 
     # For now, run single analysis (parallel agents can be added later)
     # max_agents is available for future parallel category analysis
-    response_text, files_analyzed = await run_analysis(max_time)
+    response_text, files_analyzed, usage = await run_analysis(max_time)
 
     # Parse improvements from response
     improvements = parse_improvements_from_response(response_text)
@@ -264,6 +315,7 @@ async def analyze_codebase(max_agents: int, max_time: int, category: str) -> Env
         improvements=improvements,
         analysis_time_seconds=round(analysis_time, 2),
         files_analyzed=files_analyzed,
+        usage=usage,
     )
 
 
@@ -278,8 +330,26 @@ def format_output_text(result: EnvisionResult) -> str:
         f"Analysis completed in {result.analysis_time_seconds:.1f}s",
         f"Files analyzed: {result.files_analyzed}",
         f"Improvements found: {len(result.improvements)}",
-        "",
     ]
+
+    # Add usage stats if available
+    if result.usage:
+        lines.extend([
+            "",
+            "-" * 60,
+            "  API USAGE",
+            "-" * 60,
+            f"  Input tokens:  {result.usage.input_tokens:,}",
+            f"  Output tokens: {result.usage.output_tokens:,}",
+            f"  Total tokens:  {result.usage.total_tokens:,}",
+        ])
+        if result.usage.cache_read_tokens > 0:
+            lines.append(f"  Cache read:    {result.usage.cache_read_tokens:,}")
+        cost = result.usage.estimate_cost()
+        lines.append(f"  Est. cost:     ${cost:.4f}")
+        lines.append("-" * 60)
+
+    lines.append("")
 
     if not result.improvements:
         lines.append("No improvements identified. The codebase looks good!")
@@ -331,7 +401,71 @@ def format_output_json(result: EnvisionResult) -> str:
             for i in result.improvements
         ],
     }
+    # Add usage if available
+    if result.usage:
+        data["usage"] = {
+            "input_tokens": result.usage.input_tokens,
+            "output_tokens": result.usage.output_tokens,
+            "total_tokens": result.usage.total_tokens,
+            "cache_read_tokens": result.usage.cache_read_tokens,
+            "estimated_cost_usd": result.usage.estimate_cost(),
+        }
     return json.dumps(data, indent=2)
+
+
+def write_github_summary(result: EnvisionResult) -> None:
+    """Write summary to GitHub Actions step summary if available."""
+    import os
+    summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_file:
+        return
+
+    lines = [
+        "## Envision Analysis Results",
+        "",
+        f"**Analysis Time:** {result.analysis_time_seconds:.1f}s",
+        f"**Files Analyzed:** {result.files_analyzed}",
+        f"**Improvements Found:** {len(result.improvements)}",
+        "",
+    ]
+
+    # Add usage stats
+    if result.usage:
+        cost = result.usage.estimate_cost()
+        lines.extend([
+            "### API Usage",
+            "",
+            "| Metric | Value |",
+            "|--------|-------|",
+            f"| Input tokens | {result.usage.input_tokens:,} |",
+            f"| Output tokens | {result.usage.output_tokens:,} |",
+            f"| Total tokens | {result.usage.total_tokens:,} |",
+            f"| Estimated cost | ${cost:.4f} |",
+            "",
+        ])
+
+    # Add improvements table
+    if result.improvements:
+        lines.extend([
+            "### Proposed Improvements",
+            "",
+            "| Priority | Title | Category | Est. Time |",
+            "|----------|-------|----------|-----------|",
+        ])
+        for imp in result.improvements:
+            priority_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(imp.priority, "⚪")
+            lines.append(
+                f"| {priority_emoji} {imp.priority.upper()} | {imp.title} | "
+                f"{imp.category.replace('_', ' ').title()} | ~{imp.estimated_time_minutes} min |"
+            )
+    else:
+        lines.append("✅ No improvements needed - codebase looks good!")
+
+    try:
+        with open(summary_file, "a") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError:
+        pass  # Silently fail if we can't write
 
 
 async def main() -> None:
@@ -362,6 +496,9 @@ async def main() -> None:
             print(format_output_json(result))
         else:
             print(format_output_text(result))
+
+        # Write GitHub Actions summary if running in CI
+        write_github_summary(result)
 
     except KeyboardInterrupt:
         print("\n\nAnalysis interrupted by user.")
