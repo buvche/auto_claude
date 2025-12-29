@@ -5,16 +5,12 @@ Monitors files for changes and proposes fixes with user approval.
 """
 
 import asyncio
-import os
-import sys
 import time
 from pathlib import Path
-from typing import Optional
+
+from claude_code_sdk import ClaudeCodeOptions, query
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
-
-from claude_code_sdk import query, ClaudeCodeOptions
-
 
 # Configuration
 WATCH_DIR = Path(__file__).parent.resolve()
@@ -60,18 +56,18 @@ class FileChangeHandler(FileSystemEventHandler):
                    for pattern in IGNORE_PATTERNS)
 
     def on_modified(self, event: FileSystemEvent):
-        if event.is_directory or self._should_ignore(event.src_path):
+        if event.is_directory or self._should_ignore(str(event.src_path)):
             return
         asyncio.run_coroutine_threadsafe(
-            self.tracker.add_change(event.src_path),
+            self.tracker.add_change(str(event.src_path)),
             self.loop
         )
 
     def on_created(self, event: FileSystemEvent):
-        if event.is_directory or self._should_ignore(event.src_path):
+        if event.is_directory or self._should_ignore(str(event.src_path)):
             return
         asyncio.run_coroutine_threadsafe(
-            self.tracker.add_change(event.src_path),
+            self.tracker.add_change(str(event.src_path)),
             self.loop
         )
 
@@ -122,9 +118,9 @@ If everything looks good, just say so."""
                 for block in message.content:
                     if hasattr(block, "text"):
                         result_text += block.text
-        elif hasattr(message, "result"):
+        elif hasattr(message, "result") and message.result:
             # ResultMessage
-            result_text = message.result
+            result_text = str(message.result)
 
     print(f"\n{result_text}")
 
