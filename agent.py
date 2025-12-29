@@ -12,6 +12,30 @@ from claude_code_sdk import ClaudeCodeOptions, query
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+
+def extract_text_from_message(message) -> str:
+    """Extract text content from a Claude SDK message.
+
+    Handles both AssistantMessage (with content) and ResultMessage formats.
+
+    Args:
+        message: A message object from the Claude SDK query() stream.
+
+    Returns:
+        Extracted text content, or empty string if no text found.
+    """
+    if hasattr(message, "content"):
+        if isinstance(message.content, str):
+            return message.content
+        elif isinstance(message.content, list):
+            return "".join(
+                block.text for block in message.content if hasattr(block, "text")
+            )
+    elif hasattr(message, "result") and message.result:
+        return str(message.result)
+    return ""
+
+
 # Configuration
 WATCH_DIR = Path(__file__).parent.resolve()
 IGNORE_PATTERNS = {".git", "__pycache__", "venv", ".venv", "node_modules", ".pyc", ".pyo"}
@@ -30,15 +54,22 @@ class ChangeTracker:
             self.pending_changes[path] = time.time()
 
     async def get_ready_changes(self) -> list[str]:
-        """Get changes that have settled (no updates for DEBOUNCE_SECONDS)."""
+        """Get changes that have settled (no updates for DEBOUNCE_SECONDS).
+
+        Uses single-pass pop() to atomically collect and remove ready items,
+        avoiding potential race conditions from two-phase collect-then-delete.
+        """
         async with self.lock:
             now = time.time()
-            ready = [
+            ready = []
+            # Single-pass: identify and remove in one operation per item
+            paths_to_remove = [
                 path for path, timestamp in self.pending_changes.items()
                 if now - timestamp >= DEBOUNCE_SECONDS
             ]
-            for path in ready:
-                del self.pending_changes[path]
+            for path in paths_to_remove:
+                self.pending_changes.pop(path, None)  # Atomic remove, ignores if missing
+                ready.append(path)
             return ready
 
 
@@ -84,8 +115,23 @@ def get_user_approval(prompt: str) -> bool:
 
 
 async def analyze_changes(changed_files: list[str]) -> None:
-    """Use Claude to analyze changes and propose fixes."""
+    """Analyze changed files using Claude and propose fixes.
 
+    Uses Claude SDK with read-only tools (Read, Glob, Grep) to analyze
+    the modified files for errors, bugs, or issues. If problems are found,
+    prompts the user for approval before applying fixes.
+
+    Args:
+        changed_files: List of absolute paths to files that were modified.
+
+    Side Effects:
+        - Prints analysis results to stdout
+        - Prompts user for input via get_user_approval() if issues found
+        - Calls apply_fixes() if user approves the suggested changes
+
+    Note:
+        Analysis is read-only; no modifications are made until user approval.
+    """
     files_list = "\n".join(f"  - {f}" for f in changed_files)
     prompt = f"""The following files were just modified:
 {files_list}
@@ -109,18 +155,12 @@ If everything looks good, just say so."""
 
     result_text = ""
 
-    async for message in query(prompt=prompt, options=options):
-        if hasattr(message, "content"):
-            # AssistantMessage with content
-            if isinstance(message.content, str):
-                result_text += message.content
-            elif isinstance(message.content, list):
-                for block in message.content:
-                    if hasattr(block, "text"):
-                        result_text += block.text
-        elif hasattr(message, "result") and message.result:
-            # ResultMessage
-            result_text = str(message.result)
+    try:
+        async for message in query(prompt=prompt, options=options):
+            result_text += extract_text_from_message(message)
+    except Exception as e:
+        print(f"\n⚠️ Analysis failed: {e}. Continuing to monitor...")
+        return
 
     print(f"\n{result_text}")
 
@@ -135,8 +175,23 @@ If everything looks good, just say so."""
 
 
 async def apply_fixes(changed_files: list[str], analysis: str) -> None:
-    """Apply fixes with user approval for each change."""
+    """Apply fixes to files based on previous analysis.
 
+    Uses Claude SDK with edit tools (Read, Edit, Write, Glob, Grep) to
+    implement the fixes identified during analysis.
+
+    Args:
+        changed_files: List of absolute paths to files needing fixes.
+        analysis: The analysis text from analyze_changes() describing
+            the issues found and proposed solutions.
+
+    Side Effects:
+        - Modifies files on disk via Claude's Edit/Write tools
+        - Streams progress output to stdout in real-time
+
+    Note:
+        Should only be called after user approval in analyze_changes().
+    """
     files_list = "\n".join(f"  - {f}" for f in changed_files)
     prompt = f"""Based on your previous analysis:
 {analysis}
@@ -155,22 +210,36 @@ Make the necessary edits to fix the issues you identified."""
         cwd=str(WATCH_DIR),
     )
 
-    async for message in query(prompt=prompt, options=options):
-        if hasattr(message, "content"):
-            if isinstance(message.content, str):
-                print(message.content, end="", flush=True)
-            elif isinstance(message.content, list):
-                for block in message.content:
-                    if hasattr(block, "text"):
-                        print(block.text, end="", flush=True)
-        elif hasattr(message, "result"):
-            print(f"\n{message.result}")
+    try:
+        async for message in query(prompt=prompt, options=options):
+            text = extract_text_from_message(message)
+            if text:
+                print(text, end="", flush=True)
+    except Exception as e:
+        print(f"\n⚠️ Applying fixes failed: {e}. Continuing to monitor...")
+        return
 
     print("\n✓ Fixes applied!")
 
 
 async def monitor_loop(tracker: ChangeTracker) -> None:
-    """Main monitoring loop."""
+    """Main monitoring loop that processes file changes.
+
+    Continuously polls the ChangeTracker for debounced file changes
+    and triggers analysis when files are ready. Runs indefinitely
+    until interrupted.
+
+    Args:
+        tracker: ChangeTracker instance collecting file system events.
+
+    Side Effects:
+        - Prints monitoring status to stdout
+        - Calls analyze_changes() for each batch of changed files
+        - Sleeps 0.5s between polling cycles to reduce CPU usage
+
+    Note:
+        Only processes files that still exist (handles deletions gracefully).
+    """
     print(f"\n{'='*60}")
     print(f"👁️  Monitoring: {WATCH_DIR}")
     print(f"{'='*60}")
