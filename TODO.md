@@ -231,7 +231,20 @@ pytest tests/ -v
 - [x] @feature - Implement envision task (GitHub issue #3)
   - Created `envision.py` - analyzes codebase and proposes improvements
   - Created `task_detector.py` - detects pending tasks in TODO/PLAN/CLAUDE.md
-  - Created `.github/workflows/envision.yml` - triggers on push/schedule/manual
+  - Created `.github/workflows/envision.yml` - triggers on manual dispatch
+- [x] @infra - Add hourly task scheduler workflow
+  - Created `.github/workflows/scheduler.yml` - runs every hour
+  - Checks for pending tasks, triggers envision if none found
+- [x] @feature - Add API error handling in agent.py
+  - Wrapped query() calls in try-except
+  - Graceful failure, continues monitoring
+- [x] @docs - Add docstrings to core async functions
+- [x] @test - Add pytest tests for task_detector.py (48 tests)
+- [x] @refactor - Extract message parsing helper function
+- [x] @refactor - Fix race condition in ChangeTracker
+- [x] @feature - Add Claude API usage tracking to envision.py
+  - Tracks input/output tokens and estimated cost
+  - Writes GitHub Actions step summary
 
 ---
 
