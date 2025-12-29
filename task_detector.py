@@ -5,8 +5,8 @@ Scans TODO.md, PLAN.md, and CLAUDE.md for pending tasks and returns them
 in a structured format for automated task processing.
 """
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 
 def parse_todo_md(path: Path) -> list[dict]:
@@ -28,7 +28,7 @@ def parse_todo_md(path: Path) -> list[dict]:
 
     try:
         content = path.read_text(encoding="utf-8")
-    except (IOError, OSError):
+    except OSError:
         return []
 
     tasks: list[dict] = []
@@ -125,7 +125,7 @@ def parse_plan_md(path: Path) -> list[dict]:
 
     try:
         content = path.read_text(encoding="utf-8")
-    except (IOError, OSError):
+    except OSError:
         return []
 
     tasks: list[dict] = []
@@ -134,16 +134,8 @@ def parse_plan_md(path: Path) -> list[dict]:
     # Regex for unchecked items: - [ ] Task description
     unchecked_pattern = re.compile(r"^-\s+\[\s*\]\s+(.+)$")
 
-    current_section = None
-
     for line in lines:
         stripped = line.strip()
-
-        # Track current section (for potential future use)
-        if stripped.startswith("### "):
-            current_section = stripped[4:].strip()
-        elif stripped.startswith("## "):
-            current_section = stripped[3:].strip()
 
         # Check for unchecked items
         match = unchecked_pattern.match(stripped)
@@ -178,7 +170,7 @@ def parse_claude_md(path: Path) -> list[dict]:
 
     try:
         content = path.read_text(encoding="utf-8")
-    except (IOError, OSError):
+    except OSError:
         return []
 
     tasks: list[dict] = []
@@ -265,7 +257,6 @@ def has_pending_tasks(base_dir: Path | None = None) -> bool:
 if __name__ == "__main__":
     # Run tests when executed directly
     import tempfile
-    import os
 
     print("=" * 60)
     print("Task Detector - Unit Tests")

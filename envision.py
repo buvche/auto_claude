@@ -13,10 +13,8 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator
 
 from claude_code_sdk import ClaudeCodeOptions, query
-
 
 # Configuration
 PROJECT_DIR = Path(__file__).parent.resolve()
