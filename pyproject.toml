@@ -9,7 +9,7 @@ authors = [
     {name = "buvche"}
 ]
 dependencies = [
-    "claude-code-sdk>=0.1.0",
+    "claude-code-sdk>=0.0.10",
     "watchdog>=3.0.0",
 ]
 
