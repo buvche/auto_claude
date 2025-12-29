@@ -33,19 +33,34 @@ on:
         required: false
 
 jobs:
+  check-api-key:
+    runs-on: ubuntu-latest
+    outputs:
+      has_key: ${{ steps.check.outputs.has_key }}
+    steps:
+      - name: Check for API key
+        id: check
+        run: |
+          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "has_key=true" >> $GITHUB_OUTPUT
+            echo "✅ ANTHROPIC_API_KEY is set"
+          else
+            echo "has_key=false" >> $GITHUB_OUTPUT
+            echo "::warning::ANTHROPIC_API_KEY secret not set."
+            echo ""
+            echo "To enable envision task:"
+            echo "1. Go to repository Settings → Secrets and variables → Actions"
+            echo "2. Add a new secret named ANTHROPIC_API_KEY"
+            echo "3. Set your Anthropic API key as the value"
+          fi
+
   envision:
+    needs: check-api-key
+    if: needs.check-api-key.outputs.has_key == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - name: Check for API key
-        run: |
-          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
-            echo "::warning::ANTHROPIC_API_KEY secret not set. Skipping envision task."
-            echo "To enable: Add ANTHROPIC_API_KEY to repository secrets"
-            exit 0
-          fi
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -73,5 +88,22 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python envision.py \
-            --max-agents ${{ github.event.inputs.max_agents || '3' }} \
-            --max-time ${{ github.event.inputs.max_time || '600' }}
+            --max-agents ${{ inputs.max_agents || '3' }} \
+            --max-time ${{ inputs.max_time || '600' }}
+
+  skip-notice:
+    needs: check-api-key
+    if: needs.check-api-key.outputs.has_key != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skipped
+        run: |
+          echo "## ⏭️ Envision Task Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ANTHROPIC_API_KEY secret is not configured." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Setup Instructions" >> $GITHUB_STEP_SUMMARY
+          echo "1. Go to **Settings → Secrets and variables → Actions**" >> $GITHUB_STEP_SUMMARY
+          echo "2. Click **New repository secret**" >> $GITHUB_STEP_SUMMARY
+          echo "3. Name: \`ANTHROPIC_API_KEY\`" >> $GITHUB_STEP_SUMMARY
+          echo "4. Value: Your Anthropic API key" >> $GITHUB_STEP_SUMMARY
