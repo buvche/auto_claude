@@ -1,0 +1,56 @@
+name: Envision Task
+
+on:
+  # Manual trigger with optional parameters
+  workflow_dispatch:
+    inputs:
+      max_agents:
+        description: 'Maximum number of agents to run in parallel'
+        required: false
+        default: '3'
+      max_time:
+        description: 'Maximum time in seconds for the envision task'
+        required: false
+        default: '600'
+
+  # Scheduled trigger - runs daily at midnight UTC
+  schedule:
+    - cron: '0 0 * * *'
+
+  # Trigger on push to main after CI passes
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches: [main]
+
+jobs:
+  envision:
+    runs-on: ubuntu-latest
+    # Only run on workflow_run if CI succeeded, always run for other triggers
+    if: >
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run envision task
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python envision.py \
+            --max-agents ${{ github.event.inputs.max_agents || '3' }} \
+            --max-time ${{ github.event.inputs.max_time || '600' }}

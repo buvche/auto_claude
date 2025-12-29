@@ -226,6 +226,12 @@ pytest tests/ -v
 - [x] @feature - Add user approval prompt flow
 - [x] @infra - Create runner script (run_agent.sh)
 - [x] @docs - Update project documentation
+- [x] @infra - Set up CI/CD (GitHub Actions, Dependabot, pre-commit)
+- [x] @test - Add unit tests (19 tests for ChangeTracker, FileChangeHandler)
+- [x] @feature - Implement envision task (GitHub issue #3)
+  - Created `envision.py` - analyzes codebase and proposes improvements
+  - Created `task_detector.py` - detects pending tasks in TODO/PLAN/CLAUDE.md
+  - Created `.github/workflows/envision.yml` - triggers on push/schedule/manual
 
 ---
 
