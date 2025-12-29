@@ -1,0 +1,67 @@
+name: Task Scheduler
+
+# Runs every hour to check for pending tasks
+# If no tasks found, triggers the envision workflow
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Every hour at minute 0
+  workflow_dispatch:      # Allow manual trigger
+
+jobs:
+  check-tasks:
+    runs-on: ubuntu-latest
+    outputs:
+      has_tasks: ${{ steps.detect.outputs.has_tasks }}
+      task_count: ${{ steps.detect.outputs.task_count }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check for pending tasks
+        id: detect
+        run: |
+          # Run task detector and capture output
+          TASKS=$(python task_detector.py 2>&1 || true)
+
+          # Check if there are pending tasks
+          if python -c "from task_detector import has_pending_tasks; exit(0 if has_pending_tasks() else 1)"; then
+            echo "has_tasks=true" >> $GITHUB_OUTPUT
+            TASK_COUNT=$(python -c "from task_detector import get_pending_tasks; print(len(get_pending_tasks()))")
+            echo "task_count=$TASK_COUNT" >> $GITHUB_OUTPUT
+            echo "Found $TASK_COUNT pending tasks"
+          else
+            echo "has_tasks=false" >> $GITHUB_OUTPUT
+            echo "task_count=0" >> $GITHUB_OUTPUT
+            echo "No pending tasks found"
+          fi
+
+      - name: Summary
+        run: |
+          echo "## Task Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.detect.outputs.has_tasks }}" == "true" ]; then
+            echo "✅ **${{ steps.detect.outputs.task_count }}** pending tasks found" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "No action needed - tasks are available for work." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "📭 **No pending tasks** found" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Triggering envision workflow to find improvements..." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  trigger-envision:
+    needs: check-tasks
+    if: needs.check-tasks.outputs.has_tasks == 'false'
+    uses: ./.github/workflows/envision.yml
+    with:
+      max_agents: '3'
+      max_time: '600'
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

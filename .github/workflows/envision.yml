@@ -5,7 +5,7 @@ name: Envision Task
 # 2. Claude Code CLI will be installed automatically
 
 on:
-  # Manual trigger only - requires API key
+  # Manual trigger
   workflow_dispatch:
     inputs:
       max_agents:
@@ -17,11 +17,24 @@ on:
         required: false
         default: '600'
 
+  # Called by scheduler workflow
+  workflow_call:
+    inputs:
+      max_agents:
+        type: string
+        required: false
+        default: '3'
+      max_time:
+        type: string
+        required: false
+        default: '600'
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+
 jobs:
   envision:
     runs-on: ubuntu-latest
-    # Only run if ANTHROPIC_API_KEY is set
-    if: ${{ vars.ENVISION_ENABLED == 'true' || github.event_name == 'workflow_dispatch' }}
     timeout-minutes: 10
 
     steps:
