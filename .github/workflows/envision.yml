@@ -1,7 +1,11 @@
 name: Envision Task
 
+# This workflow requires:
+# 1. ANTHROPIC_API_KEY secret to be set in repository settings
+# 2. Claude Code CLI will be installed automatically
+
 on:
-  # Manual trigger with optional parameters
+  # Manual trigger only - requires API key
   workflow_dispatch:
     inputs:
       max_agents:
@@ -13,29 +17,32 @@ on:
         required: false
         default: '600'
 
-  # Scheduled trigger - runs daily at midnight UTC
-  schedule:
-    - cron: '0 0 * * *'
-
-  # Trigger on push to main after CI passes
-  workflow_run:
-    workflows: ["CI"]
-    types:
-      - completed
-    branches: [main]
-
 jobs:
   envision:
     runs-on: ubuntu-latest
-    # Only run on workflow_run if CI succeeded, always run for other triggers
-    if: >
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
+    # Only run if ANTHROPIC_API_KEY is set
+    if: ${{ vars.ENVISION_ENABLED == 'true' || github.event_name == 'workflow_dispatch' }}
     timeout-minutes: 10
 
     steps:
+      - name: Check for API key
+        run: |
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "::warning::ANTHROPIC_API_KEY secret not set. Skipping envision task."
+            echo "To enable: Add ANTHROPIC_API_KEY to repository secrets"
+            exit 0
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -49,6 +56,7 @@ jobs:
 
       - name: Run envision task
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python envision.py \
